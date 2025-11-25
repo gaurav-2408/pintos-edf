@@ -367,20 +367,15 @@ static void worker(void *aux UNUSED)
 }
 
 void test_edf(void) {
-    enum intr_level old_level;
+    enum intr_level old_level = intr_disable();
 
-    /* Prevent immediate preemption while creating threads */
-    old_level = intr_disable();
+    /* Create threads with different deadlines */
+    // thread_create("T3", PRI_DEFAULT, worker, (void*)(intptr_t)50);
+    thread_create("T1", PRI_DEFAULT, worker, (void*)(intptr_t)200);
+    thread_create("T2", PRI_DEFAULT, worker, (void*)(intptr_t)100);
+    thread_create("T3", PRI_DEFAULT, worker, (void*)(intptr_t)50);
 
-    thread_create("T3", PRI_DEFAULT, worker, (void*)(intptr_t)80);
-    thread_create("T1", PRI_DEFAULT, worker, (void*)(intptr_t)50);
-    thread_create("T2", PRI_DEFAULT, worker, (void*)(intptr_t)20);
-    // thread_create("T3", PRI_DEFAULT, worker, (void*)(intptr_t)80);
-
-    /* Re-enable interrupts and let scheduler pick the best thread by EDF */
     intr_set_level(old_level);
-
-    /* Yield so scheduler can immediately choose the earliest-deadline thread */
     thread_yield();
 }
 

@@ -277,10 +277,12 @@ void
 thread_unblock (struct thread *t)
 {
   enum intr_level old_level;
+  bool interrupts_were_on;
 
   ASSERT (is_thread (t));
 
   old_level = intr_disable ();
+  interrupts_were_on = (old_level == INTR_ON);
   ASSERT (t->status == THREAD_BLOCKED);
 
   /* insert into ready_list in EDF order */
@@ -303,7 +305,7 @@ thread_unblock (struct thread *t)
     {
       if (intr_context())
         do_yield_on_return = true;
-      else
+      else if (interrupts_were_on)
         do_yield = true;
     }
 
