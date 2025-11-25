@@ -128,6 +128,8 @@ pintos_init (void)
 #endif
 
   printf ("Boot complete.\n");
+
+  test_edf();
   
   if (*argv != NULL) {
     /* Run actions specified on kernel command line. */
@@ -346,6 +348,42 @@ run_actions (char **argv)
     }
   
 }
+
+static void worker(void *aux UNUSED)
+{
+  thread_yield();
+  printf("Thread %s started with deadline %lld\n", thread_current()->name,
+         (long long) thread_current()->deadline);
+    struct thread *t = thread_current();
+    printf("Thread %s started with deadline %lld\n",
+            t->name, t->deadline);
+
+    for (int i = 0; i < 3; i++) {
+        printf("Thread %s running iteration %d\n", t->name, i);
+        timer_sleep(10);
+    }
+
+    printf("Thread %s finished\n", t->name);
+}
+
+void test_edf(void) {
+    enum intr_level old_level;
+
+    /* Prevent immediate preemption while creating threads */
+    old_level = intr_disable();
+
+    thread_create("T3", PRI_DEFAULT, worker, (void*)(intptr_t)80);
+    thread_create("T1", PRI_DEFAULT, worker, (void*)(intptr_t)50);
+    thread_create("T2", PRI_DEFAULT, worker, (void*)(intptr_t)20);
+    // thread_create("T3", PRI_DEFAULT, worker, (void*)(intptr_t)80);
+
+    /* Re-enable interrupts and let scheduler pick the best thread by EDF */
+    intr_set_level(old_level);
+
+    /* Yield so scheduler can immediately choose the earliest-deadline thread */
+    thread_yield();
+}
+
 
 /** Prints a kernel command line help message and powers off the
    machine. */

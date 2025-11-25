@@ -71,6 +71,20 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+static void
+debug_dump_ready_list(void)
+{
+  struct list_elem *e;
+  printf("READY LIST: ");
+  for (e = list_begin(&ready_list); e != list_end(&ready_list); e = list_next(e))
+    {
+      struct thread *t = list_entry(e, struct thread, elem);
+      printf("[%s:dl=%lld] ", t->name, (long long) t->deadline);
+    }
+  printf("\n");
+}
+
+
 /** Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -183,6 +197,22 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+ /* Interpret aux as a deadline offset for test purposes. */
+  int64_t offset = 50;
+if (aux != NULL) {
+      intptr_t ai = (intptr_t) aux;
+      if (ai >= 0 && ai < 1000000) /* reasonable sanity bounds */
+        offset = (int64_t) ai;
+      else
+        offset = 0; /* or keep default */
+  }
+
+
+  t->deadline = timer_ticks() + offset;
+  printf("Created thread %s (tid %d) offset=%lld now=%lld deadline=%lld\n",
+         name, tid, (long long) offset, (long long) timer_ticks(),
+         (long long) t->deadline);
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -220,6 +250,21 @@ thread_block (void)
   schedule ();
 }
 
+bool edf_less_func (const struct list_elem *a,
+                    const struct list_elem *b,
+                    void *aux UNUSED)
+{
+  const struct thread *ta = list_entry (a, struct thread, elem);
+  const struct thread *tb = list_entry (b, struct thread, elem);
+
+  if (ta->deadline < tb->deadline) return true;
+  if (ta->deadline > tb->deadline) return false;
+  return ta->tid < tb->tid; /* tie-break by tid */
+}
+
+
+
+
 /** Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -229,7 +274,7 @@ thread_block (void)
    it may expect that it can atomically unblock a thread and
    update other data. */
 void
-thread_unblock (struct thread *t) 
+thread_unblock (struct thread *t)
 {
   enum intr_level old_level;
 
@@ -237,10 +282,46 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+
+  /* insert into ready_list in EDF order */
+  list_insert_ordered(&ready_list, &t->elem, edf_less_func, NULL);
   t->status = THREAD_READY;
+
+  printf("thread_unblock: unblocked %s (dl=%lld)\n", t->name, (long long) t->deadline);
+  debug_dump_ready_list();
+
+  /* Preemption decision:
+     - If called from interrupt context we will request a yield on return.
+     - If not, we'll set a flag to call thread_yield() after restoring interrupts.
+     We DO NOT call thread_yield() while interrupts are disabled. */
+  struct thread *cur = running_thread(); /* explicitly the currently running thread */
+  bool do_yield = false;
+  bool do_yield_on_return = false;
+
+  if (t != idle_thread && cur != NULL && cur->status == THREAD_RUNNING &&
+      t->deadline < cur->deadline)
+    {
+      if (intr_context())
+        do_yield_on_return = true;
+      else
+        do_yield = true;
+    }
+
+  /* Restore interrupts before actually yielding (if needed). */
   intr_set_level (old_level);
+
+  if (do_yield_on_return)
+    {
+      /* Safe to request a yield-on-return from interrupt context. */
+      intr_yield_on_return ();
+    }
+  else if (do_yield)
+    {
+      /* Now that interrupts are restored, perform a normal yield. */
+      thread_yield ();
+    }
 }
+
 
 /** Returns the name of the running thread. */
 const char *
@@ -303,12 +384,13 @@ thread_yield (void)
 {
   struct thread *cur = thread_current ();
   enum intr_level old_level;
-  
+
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered (&ready_list, &cur->elem, edf_less_func, NULL);
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -451,8 +533,6 @@ is_thread (struct thread *t)
 static void
 init_thread (struct thread *t, const char *name, int priority)
 {
-  enum intr_level old_level;
-
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
@@ -462,12 +542,16 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+
+  t->deadline = INT64_MAX;   /* EDF default */
+
   t->magic = THREAD_MAGIC;
 
-  old_level = intr_disable ();
+  /* Add to the list of all threads so thread_exit() can remove it safely. */
   list_push_back (&all_list, &t->allelem);
-  intr_set_level (old_level);
 }
+
+
 
 /** Allocates a SIZE-byte frame at the top of thread T's stack and
    returns a pointer to the frame's base. */

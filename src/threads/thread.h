@@ -100,6 +100,7 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /**< Detects stack overflow. */
+    int64_t deadline;   /* Deadline tick for EDF scheduling. */
   };
 
 /** If false (default), use round-robin scheduler.
